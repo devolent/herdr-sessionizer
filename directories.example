@@ -1,5 +1,7 @@
 # herdr-sessionizer directories: one path per line, ~ is expanded.
 # A path ending in /* offers its subdirectories; anything else is offered as-is.
+# "path = name" names the workspace (single folders only), for example when two
+# folders share a name.
 # Missing paths are skipped, so this list can be shared between machines.
 #
 # Copy to ~/.config/herdr/sessionizer/directories and edit.
@@ -12,3 +14,7 @@
 ~
 ~/.config/nvim
 ~/.dotfiles
+
+# two folders called "api" would otherwise share one workspace
+~/work/shop/api = shop-api
+~/work/billing/api = billing-api

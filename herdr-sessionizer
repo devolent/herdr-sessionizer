@@ -6,30 +6,54 @@
 #
 # Directories come from $HERDR_SESSIONIZER_CONFIG, default
 # ${XDG_CONFIG_HOME:-~/.config}/herdr/sessionizer/directories. One path per
-# line; a path ending in /* offers its subdirectories instead of itself.
+# line; a path ending in /* offers its subdirectories instead of itself, and
+# "path = name" names the workspace explicitly.
 config=${HERDR_SESSIONIZER_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/herdr/sessionizer/directories}
 
-list_directories() {
-	local line
+directories=()
+declare -A labels=() seen=()
+
+add_directory() {
+	[[ -n ${seen[$1]} ]] && return
+	seen[$1]=1
+	directories+=("$1")
+}
+
+read_config() {
+	local line path label dir
 	while IFS= read -r line || [[ -n $line ]]; do
-		# trim, skip blanks and comments, expand a leading ~
+		# trim, skip blanks and comments
 		line=${line#"${line%%[![:space:]]*}"}
 		line=${line%"${line##*[![:space:]]}"}
 		[[ -z $line || $line == \#* ]] && continue
-		[[ $line == "~" || $line == "~/"* ]] && line=$HOME${line:1}
 
-		if [[ $line == */\* ]]; then
-			find "${line%/\*}" -mindepth 1 -maxdepth 1 -type d -not -name ".*" 2>/dev/null
-		elif [[ -d $line ]]; then
-			echo "$line"
+		# "path = name"; the spaces around = are required, so paths may contain =
+		label=
+		path=$line
+		if [[ $line =~ ^(.*[^[:space:]])[[:space:]]+=[[:space:]]+(.+)$ ]]; then
+			path=${BASH_REMATCH[1]}
+			label=${BASH_REMATCH[2]}
+		fi
+		[[ $path == "~" || $path == "~/"* ]] && path=$HOME${path:1}
+
+		if [[ $path == */\* ]]; then
+			while IFS= read -r dir; do
+				add_directory "$dir"
+			done < <(find "${path%/\*}" -mindepth 1 -maxdepth 1 -type d -not -name ".*" 2>/dev/null)
+		elif [[ -d $path ]]; then
+			path=$(realpath "$path")
+			add_directory "$path"
+			[[ -n $label ]] && labels[$path]=$label
 		fi
 	done < <(if [[ -f $config ]]; then cat "$config"; else printf '%s\n' '~' '~/*'; fi)
 }
 
+read_config
+
 if [[ $# -eq 1 ]]; then
 	selected=$1
-else
-	selected=$(list_directories | fzf)
+elif ((${#directories[@]})); then
+	selected=$(printf '%s\n' "${directories[@]}" | fzf)
 fi
 
 if [[ -z $selected ]]; then
@@ -37,10 +61,15 @@ if [[ -z $selected ]]; then
 fi
 selected=$(realpath "$selected")
 
-# Same naming as tmux-sessionizer; used as the workspace label.
-selected_name=$(basename "$selected" | tr . _ | tr ' ' _)
-# Match herdr's own label for a workspace sitting in the home dir.
-[[ $selected == "$(realpath ~)" ]] && selected_name="~"
+if [[ -n ${labels[$selected]} ]]; then
+	selected_name=${labels[$selected]}
+elif [[ $selected == "$(realpath ~)" ]]; then
+	# Match herdr's own label for a workspace sitting in the home dir.
+	selected_name="~"
+else
+	# Same naming as tmux-sessionizer.
+	selected_name=$(basename "$selected" | tr . _ | tr ' ' _)
+fi
 
 # Outside herdr there may be no server yet. Start one detached, the same way a
 # bare `herdr` would, so the workspace exists before we attach.

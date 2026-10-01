@@ -7,8 +7,9 @@ own herdr workspace, or jump to that workspace if it is already open.
 - Inside herdr it switches your current client to the workspace.
 - Outside herdr it starts the herdr server if needed, opens the workspace, and
   attaches.
-- Workspaces are labelled with the directory name (`.` and spaces become `_`).
-  Your home directory is labelled `~`, matching what herdr shows on its own.
+- Workspaces are labelled with the directory name (`.` and spaces become `_`),
+  unless the directories file names them. Your home directory is labelled `~`,
+  matching what herdr shows on its own.
 
 ## Requirements
 
@@ -35,7 +36,15 @@ what the picker offers, one path per line:
 # any other path is offered as-is
 ~
 ~/.dotfiles
+
+# "path = name" names the workspace, e.g. to tell two "api" folders apart
+~/work/shop/api = shop-api
+~/work/billing/api = billing-api
 ```
+
+Names only apply to single folders, not `/*` lines. A named folder also
+overrides that folder where a `/*` line lists it, and it is only offered once.
+The spaces around `=` are required, so paths containing `=` still work.
 
 `~` is expanded, `#` starts a comment line, and paths that don't exist are
 skipped, so one list can be shared between machines. Without the file, the

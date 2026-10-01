@@ -19,13 +19,13 @@ herdr (tested with 0.9.3), bash, fzf, jq.
 ```sh
 git clone git@github.com:devolent/herdr-sessionizer.git
 ln -s "$PWD/herdr-sessionizer/herdr-sessionizer" ~/.local/bin/herdr-sessionizer
-mkdir -p ~/.config/herdr-sessionizer
-cp herdr-sessionizer/directories.example ~/.config/herdr-sessionizer/directories
+mkdir -p ~/.config/herdr/sessionizer
+cp herdr-sessionizer/directories.example ~/.config/herdr/sessionizer/directories
 ```
 
 ## Directories
 
-`~/.config/herdr-sessionizer/directories` (or `$HERDR_SESSIONIZER_CONFIG`) lists
+`~/.config/herdr/sessionizer/directories` (or `$HERDR_SESSIONIZER_CONFIG`) lists
 what the picker offers, one path per line:
 
 ```

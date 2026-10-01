@@ -5,9 +5,9 @@
 # terminal (starts the server if needed, then attaches).
 #
 # Directories come from $HERDR_SESSIONIZER_CONFIG, default
-# ${XDG_CONFIG_HOME:-~/.config}/herdr-sessionizer/directories. One path per
+# ${XDG_CONFIG_HOME:-~/.config}/herdr/sessionizer/directories. One path per
 # line; a path ending in /* offers its subdirectories instead of itself.
-config=${HERDR_SESSIONIZER_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/herdr-sessionizer/directories}
+config=${HERDR_SESSIONIZER_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/herdr/sessionizer/directories}
 
 list_directories() {
 	local line

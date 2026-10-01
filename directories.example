@@ -2,7 +2,7 @@
 # A path ending in /* offers its subdirectories; anything else is offered as-is.
 # Missing paths are skipped, so this list can be shared between machines.
 #
-# Copy to ~/.config/herdr-sessionizer/directories and edit.
+# Copy to ~/.config/herdr/sessionizer/directories and edit.
 
 # every project under these folders
 ~/projects/*

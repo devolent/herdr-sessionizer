@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# herdr-sessionizer: pick a project dir with fzf and open it in its own herdr
+# workspace, or jump to it if it is already open.
+# Works from inside herdr (switches the current client) and from a plain
+# terminal (starts the server if needed, then attaches).
+#
+# Directories come from $HERDR_SESSIONIZER_CONFIG, default
+# ${XDG_CONFIG_HOME:-~/.config}/herdr-sessionizer/directories. One path per
+# line; a path ending in /* offers its subdirectories instead of itself.
+config=${HERDR_SESSIONIZER_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/herdr-sessionizer/directories}
+
+list_directories() {
+	local line
+	while IFS= read -r line || [[ -n $line ]]; do
+		# trim, skip blanks and comments, expand a leading ~
+		line=${line#"${line%%[![:space:]]*}"}
+		line=${line%"${line##*[![:space:]]}"}
+		[[ -z $line || $line == \#* ]] && continue
+		[[ $line == "~" || $line == "~/"* ]] && line=$HOME${line:1}
+
+		if [[ $line == */\* ]]; then
+			find "${line%/\*}" -mindepth 1 -maxdepth 1 -type d -not -name ".*" 2>/dev/null
+		elif [[ -d $line ]]; then
+			echo "$line"
+		fi
+	done < <(if [[ -f $config ]]; then cat "$config"; else printf '%s\n' '~' '~/*'; fi)
+}
+
+if [[ $# -eq 1 ]]; then
+	selected=$1
+else
+	selected=$(list_directories | fzf)
+fi
+
+if [[ -z $selected ]]; then
+	exit 0
+fi
+selected=$(realpath "$selected")
+
+# Same naming as tmux-sessionizer; used as the workspace label.
+selected_name=$(basename "$selected" | tr . _ | tr ' ' _)
+# Match herdr's own label for a workspace sitting in the home dir.
+[[ $selected == "$(realpath ~)" ]] && selected_name="~"
+
+# Outside herdr there may be no server yet. Start one detached, the same way a
+# bare `herdr` would, so the workspace exists before we attach.
+if [[ $HERDR_ENV != 1 ]] && ! herdr workspace list >/dev/null 2>&1; then
+	setsid -f herdr server >/dev/null 2>&1 </dev/null
+	for _ in $(seq 50); do
+		herdr workspace list >/dev/null 2>&1 && break
+		sleep 0.1
+	done
+fi
+
+workspace_id=$(herdr workspace list | jq -r --arg l "$selected_name" \
+	'first(.result.workspaces[] | select(.label == $l) | .workspace_id) // empty')
+
+if [[ -z $workspace_id ]]; then
+	herdr workspace create --cwd "$selected" --label "$selected_name" --focus >/dev/null || exit 1
+else
+	herdr workspace focus "$workspace_id" >/dev/null
+fi
+
+# Inside herdr the focus change already switched the client; outside, attach.
+if [[ $HERDR_ENV != 1 ]]; then
+	exec herdr
+fi

@@ -8,10 +8,9 @@ own herdr workspace, or jump to that workspace if it is already open.
 - Outside herdr it starts the herdr server if needed, opens the workspace, and
   attaches.
 - Workspaces are labelled with the directory name (`.` and spaces become `_`),
-  or from the first wildcard on for folders found by one (`~/customers/*/*`
-  labels `~/customers/acme/api` as `acme/api`), unless the directories file
-  names them. Your home directory is labelled `~`, matching what herdr shows on
-  its own.
+  unless the directories file names them or a [wildcard](#wildcards) found
+  them. Your home directory is labelled `~`, matching what herdr shows on its
+  own.
 
 ## Requirements
 
@@ -32,12 +31,8 @@ cp herdr-sessionizer/directories.example ~/.config/herdr/sessionizer/directories
 what the picker offers, one path per line:
 
 ```
-# a path with wildcards (*, ?, [...]) offers every folder it matches, hidden
-# ones skipped
+# a path with wildcards offers every folder it matches (see Wildcards below)
 ~/projects/*
-
-# these are named from the first wildcard on, so ~/customers/acme/api becomes
-# "acme/api" and won't clash with ~/customers/globex/api
 ~/customers/*/*
 
 # any other path is offered as-is
@@ -49,9 +44,8 @@ what the picker offers, one path per line:
 ~/work/billing/api = billing-api
 ```
 
-Names only apply to single folders, not wildcard lines. A named folder also
-overrides that folder where a wildcard line lists it, and it is only offered
-once. The spaces around `=` are required, so paths containing `=` still work.
+Names only apply to single folders, not wildcard lines. The spaces around `=`
+are required, so paths containing `=` still work.
 
 `~` is expanded, `#` starts a comment line, and paths that don't exist are
 skipped, so one list can be shared between machines. Without the file, the
@@ -59,6 +53,50 @@ picker offers `~` and its subdirectories.
 
 Pass a directory as the only argument to skip the picker:
 `herdr-sessionizer ~/projects/foo`.
+
+## Wildcards
+
+A line with a wildcard offers every folder it matches instead of itself. The
+wildcards are the shell's:
+
+| Wildcard | Matches                              | Example                |
+| -------- | ------------------------------------ | ---------------------- |
+| `*`      | any part of a name                   | `~/projects/*`         |
+| `?`      | exactly one character                | `~/archive/20??`       |
+| `[...]`  | one character from a set or range    | `~/customers/[a-m]*/*` |
+| `[!...]` | one character that isn't in the set  | `~/src/[!_]*`          |
+
+A wildcard never crosses a `/`, so use one per level you want to go down:
+`~/customers/*/*` reaches `~/customers/acme/api` but not
+`~/customers/acme/api/v2`.
+
+Folders found by a wildcard are named from the first wildcard on, so folders
+that share a name under different parents get their own workspaces:
+
+| Line                   | Offers                                                   | Named        |
+| ---------------------- | -------------------------------------------------------- | ------------ |
+| `~/projects/*`         | `~/projects/foo`                                         | `foo`        |
+| `~/customers/*/*`      | `~/customers/acme/api`                                   | `acme/api`   |
+|                        | `~/customers/globex/api`                                 | `globex/api` |
+| `~/customers/*/src`    | `~/customers/acme/src`                                   | `acme/src`   |
+| `~/clients/acme-*`     | `~/clients/acme-web`                                     | `acme-web`   |
+| `~/archive/20??`       | `~/archive/2024`, but not `~/archive/old`                | `2024`       |
+| `~/customers/[a-m]*/*` | `~/customers/acme/api`, but not `~/customers/zenith/api` | `acme/api`   |
+| `~/src/[!_]*`          | `~/src/tool`, but not `~/src/_scratch`                   | `tool`       |
+
+- Only folders are offered; files are skipped.
+- Hidden folders are skipped unless the pattern starts the name with a dot:
+  `~/work/.*` offers `~/work/.cache` as `_cache` (needs bash 5.2 or newer,
+  older versions also match `.` and `..`).
+- `.` and spaces in names become `_`: `~/customers/my.co/new app` is
+  `my_co/new_app`.
+- A folder matched by more than one line is offered once, named by the first
+  of those lines. A `path = name` line for it always wins, wherever it is.
+- Symlinked folders are offered too, and the picker shows the real path.
+- `**` is not recursive, it works like `*`. Braces aren't expanded either, so
+  `~/customers/{acme,globex}/*` offers nothing; write one line for each.
+- To match `*`, `?` or `[` literally, put it in brackets: `~/music/[[]old]`
+  offers `~/music/[old]`. A backslash doesn't work.
 
 ## Keybindings
 

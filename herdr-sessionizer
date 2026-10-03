@@ -22,11 +22,14 @@ add_directory() {
 # Add each non-hidden directory matching a glob, named after its path from the
 # first wildcard on: ~/customers/*/* names ~/customers/acme/api "acme/api".
 add_glob() {
-	local IFS= base=${1%%[*?[]*} label i
+	local IFS= base=${1%%[*?[]*} match label i
 	local -a matches dirs
 	base=${base%/*}
+	# a pattern that isn't one, like a lone "[", comes back as-is
 	shopt -s nullglob
-	matches=($1/)
+	for match in $1/; do
+		[[ -d $match ]] && matches+=("$match")
+	done
 	shopt -u nullglob
 	((${#matches[@]})) || return
 	mapfile -t dirs < <(realpath -- "${matches[@]}")

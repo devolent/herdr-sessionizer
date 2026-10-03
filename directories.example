@@ -1,5 +1,6 @@
 # herdr-sessionizer directories: one path per line, ~ is expanded.
-# A path ending in /* offers its subdirectories; anything else is offered as-is.
+# A path with wildcards offers every folder it matches, named from the first
+# wildcard on; anything else is offered as-is.
 # "path = name" names the workspace (single folders only), for example when two
 # folders share a name.
 # Missing paths are skipped, so this list can be shared between machines.
@@ -9,6 +10,9 @@
 # every project under these folders
 ~/projects/*
 ~/work/*
+
+# one level deeper: ~/customers/acme/api becomes workspace "acme/api"
+~/customers/*/*
 
 # single folders
 ~

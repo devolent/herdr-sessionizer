@@ -8,8 +8,10 @@ own herdr workspace, or jump to that workspace if it is already open.
 - Outside herdr it starts the herdr server if needed, opens the workspace, and
   attaches.
 - Workspaces are labelled with the directory name (`.` and spaces become `_`),
-  unless the directories file names them. Your home directory is labelled `~`,
-  matching what herdr shows on its own.
+  or from the first wildcard on for folders found by one (`~/customers/*/*`
+  labels `~/customers/acme/api` as `acme/api`), unless the directories file
+  names them. Your home directory is labelled `~`, matching what herdr shows on
+  its own.
 
 ## Requirements
 
@@ -30,8 +32,13 @@ cp herdr-sessionizer/directories.example ~/.config/herdr/sessionizer/directories
 what the picker offers, one path per line:
 
 ```
-# a path ending in /* offers each of its subdirectories (hidden ones skipped)
+# a path with wildcards (*, ?, [...]) offers every folder it matches, hidden
+# ones skipped
 ~/projects/*
+
+# these are named from the first wildcard on, so ~/customers/acme/api becomes
+# "acme/api" and won't clash with ~/customers/globex/api
+~/customers/*/*
 
 # any other path is offered as-is
 ~
@@ -42,9 +49,9 @@ what the picker offers, one path per line:
 ~/work/billing/api = billing-api
 ```
 
-Names only apply to single folders, not `/*` lines. A named folder also
-overrides that folder where a `/*` line lists it, and it is only offered once.
-The spaces around `=` are required, so paths containing `=` still work.
+Names only apply to single folders, not wildcard lines. A named folder also
+overrides that folder where a wildcard line lists it, and it is only offered
+once. The spaces around `=` are required, so paths containing `=` still work.
 
 `~` is expanded, `#` starts a comment line, and paths that don't exist are
 skipped, so one list can be shared between machines. Without the file, the

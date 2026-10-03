@@ -6,7 +6,7 @@
 #
 # Directories come from $HERDR_SESSIONIZER_CONFIG, default
 # ${XDG_CONFIG_HOME:-~/.config}/herdr/sessionizer/directories. One path per
-# line; a path ending in /* offers its subdirectories instead of itself, and
+# line; a path with wildcards offers every directory it matches instead, and
 # "path = name" names the workspace explicitly.
 config=${HERDR_SESSIONIZER_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/herdr/sessionizer/directories}
 
@@ -19,8 +19,29 @@ add_directory() {
 	directories+=("$1")
 }
 
+# Add each non-hidden directory matching a glob, named after its path from the
+# first wildcard on: ~/customers/*/* names ~/customers/acme/api "acme/api".
+add_glob() {
+	local IFS= base=${1%%[*?[]*} label i
+	local -a matches dirs
+	base=${base%/*}
+	shopt -s nullglob
+	matches=($1/)
+	shopt -u nullglob
+	((${#matches[@]})) || return
+	mapfile -t dirs < <(realpath -- "${matches[@]}")
+	for i in "${!matches[@]}"; do
+		add_directory "${dirs[i]}"
+		label=${matches[i]#"$base"/}
+		label=${label%/}
+		label=${label//[. ]/_}
+		# an explicit "path = name" wins, whichever line comes first
+		[[ -z ${labels[${dirs[i]}]} ]] && labels[${dirs[i]}]=$label
+	done
+}
+
 read_config() {
-	local line path label dir
+	local line path label
 	while IFS= read -r line || [[ -n $line ]]; do
 		# trim, skip blanks and comments
 		line=${line#"${line%%[![:space:]]*}"}
@@ -36,10 +57,8 @@ read_config() {
 		fi
 		[[ $path == "~" || $path == "~/"* ]] && path=$HOME${path:1}
 
-		if [[ $path == */\* ]]; then
-			while IFS= read -r dir; do
-				add_directory "$dir"
-			done < <(find "${path%/\*}" -mindepth 1 -maxdepth 1 -type d -not -name ".*" 2>/dev/null)
+		if [[ $path == *[*?[]* ]]; then
+			add_glob "$path"
 		elif [[ -d $path ]]; then
 			path=$(realpath "$path")
 			add_directory "$path"

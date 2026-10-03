@@ -1,0 +1,3 @@
+#!/bin/sh
+# Logs the window it was asked to open instead of opening it.
+printf 'xdg-terminal-exec %s\n' "$*" >> "$TEST_LOG"

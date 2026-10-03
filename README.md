@@ -54,6 +54,16 @@ picker offers `~` and its subdirectories.
 Pass a directory as the only argument to skip the picker:
 `herdr-sessionizer ~/projects/foo`.
 
+Two more options are mostly there for the [Neovim](#keybindings) mapping:
+
+- `--print` shows the picker and prints the chosen directory instead of opening
+  it.
+- `--edit FILE [LINE [COLUMN]]` opens a file in Neovim in its project's
+  workspace, in the background: the nearest folder above the file that is in
+  your directories list, else its git root, else the folder it's in. An open
+  workspace gets a new tab for it, so nothing already running there is typed
+  into.
+
 ## Wildcards
 
 A line with a wildcard offers every folder it matches instead of itself. The
@@ -129,15 +139,11 @@ bindkey -s '^f' 'herdr-sessionizer\n'
 ```
 
 **Neovim** (0.11 or newer) runs the picker in a floating terminal, because fzf
-needs a tty, and closes the float when it's done. Add it to your keymaps:
+needs a tty. Add it to your keymaps:
 
 ```lua
 -- herdr-sessionizer needs a tty for fzf, so run it in a float that closes on exit
-vim.keymap.set("n", "<C-f>", function()
-	if vim.env.HERDR_ENV ~= "1" then
-		vim.notify("herdr-sessionizer: not inside herdr", vim.log.levels.WARN)
-		return
-	end
+local function sessionizer_float(cmd, on_exit)
 	local width = math.floor(vim.o.columns * 0.6)
 	local height = math.floor(vim.o.lines * 0.6)
 	local win = vim.api.nvim_open_win(vim.api.nvim_create_buf(false, true), true, {
@@ -148,20 +154,114 @@ vim.keymap.set("n", "<C-f>", function()
 		col = math.floor((vim.o.columns - width) / 2),
 		border = "rounded",
 	})
-	vim.fn.jobstart({ "herdr-sessionizer" }, {
+	vim.fn.jobstart(cmd, {
 		term = true,
 		on_exit = function()
 			if vim.api.nvim_win_is_valid(win) then
 				vim.api.nvim_win_close(win, true)
 			end
+			if on_exit then
+				on_exit()
+			end
 		end,
 	})
 	vim.cmd.startinsert()
+end
+
+-- Open herdr on dir in a new terminal window, and quit if no files are left open.
+local function sessionizer_window(dir)
+	local cmd = { "xdg-terminal-exec", vim.fn.exepath("herdr-sessionizer"), dir }
+	if vim.fn.executable("uwsm-app") == 1 then
+		cmd = { "uwsm-app", "--", unpack(cmd) }
+	end
+	vim.fn.jobstart(cmd, { detach = true })
+	for _, info in ipairs(vim.fn.getbufinfo({ buflisted = 1 })) do
+		if info.name ~= "" then
+			return
+		end
+	end
+	vim.cmd("confirm qall")
+end
+
+vim.keymap.set("n", "<C-f>", function()
+	if vim.env.HERDR_ENV == "1" then
+		sessionizer_float({ "herdr-sessionizer" })
+		return
+	end
+
+	-- Outside herdr: move the current file into its project's workspace, then
+	-- open herdr on the picked directory in a new window.
+	local buf = vim.api.nvim_get_current_buf()
+	local file = vim.api.nvim_buf_get_name(buf)
+	local row, col = unpack(vim.api.nvim_win_get_cursor(0))
+	local picked = vim.fn.tempname()
+	sessionizer_float({ "sh", "-c", 'herdr-sessionizer --print > "$1"', "sh", picked }, function()
+		local dir = vim.fn.filereadable(picked) == 1 and vim.fn.readfile(picked)[1] or ""
+		vim.fn.delete(picked)
+		if dir == "" then
+			return
+		end
+		if vim.bo[buf].buftype ~= "" or vim.fn.filereadable(file) == 0 then
+			sessionizer_window(dir)
+			return
+		end
+		if vim.bo[buf].modified then
+			local name = vim.fn.fnamemodify(file, ":~:.")
+			local answer = vim.fn.confirm(("Save changes to %s?"):format(name), "&Yes\n&No\n&Cancel")
+			if answer == 1 then
+				vim.api.nvim_buf_call(buf, function()
+					vim.cmd.write()
+				end)
+			elseif answer ~= 2 then
+				return
+			end
+		end
+		-- close it here so the Neovim in herdr can open it without a swap file warning
+		vim.api.nvim_buf_delete(buf, { force = true })
+		local edit = { "herdr-sessionizer", "--edit", file, tostring(row), tostring(col + 1) }
+		vim.system(edit, {}, vim.schedule_wrap(function(result)
+			if result.code ~= 0 then
+				vim.notify("herdr-sessionizer: couldn't open " .. file .. " in herdr", vim.log.levels.ERROR)
+				vim.cmd.edit(vim.fn.fnameescape(file))
+				vim.api.nvim_win_set_cursor(0, { row, col })
+				return
+			end
+			sessionizer_window(dir)
+		end))
+	end)
 end, { noremap = true, desc = "Open herdr sessionizer" })
 ```
 
-Inside herdr, this doesn't run while the herdr binding above is on `ctrl+f`:
-herdr takes the key before Neovim sees it and opens its own popup instead. The
-mapping only fires if you moved the herdr binding to another key, such as
-`prefix+f`. Outside herdr it only shows a "not inside herdr" warning, because
-the sessionizer would end by attaching herdr inside Neovim's float.
+Outside herdr, picking a directory also moves the file you're editing into
+herdr:
+
+1. If the file has unsaved changes, it asks whether to save them. Cancel stops
+   here, and so does closing the picker without choosing.
+2. The file closes, and `herdr-sessionizer --edit` opens it in Neovim at the
+   same cursor position, in its project's workspace: the nearest folder above
+   the file that is in your directories list, else its git root, else the
+   folder it's in. If that workspace is already open, the file gets a new tab
+   there.
+3. A new terminal window opens with herdr on the directory you picked, through
+   `xdg-terminal-exec`, or `uwsm-app -- xdg-terminal-exec` where `uwsm-app` is
+   installed, as on Omarchy.
+4. If no other files are open, Neovim quits. The old window stays either way.
+
+If the current buffer isn't a file, it goes straight to the new window.
+
+Inside herdr, the mapping doesn't run while the herdr binding above is on
+`ctrl+f`: herdr takes the key before Neovim sees it and opens its own popup
+instead. It only fires there if you moved the herdr binding to another key,
+such as `prefix+f`.
+
+## Tests
+
+```sh
+test/run
+```
+
+The tests need herdr, jq and git, and Neovim for the mapping tests. They run in
+a throwaway herdr session and a temporary home directory, so they don't touch
+your workspaces, and stand-ins replace fzf, `nvim` in herdr panes and the
+terminal launcher, so no window opens. The Neovim tests load the mapping from
+this README, so the snippet above is the one being tested.

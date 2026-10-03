@@ -1,0 +1,5 @@
+#!/bin/sh
+# Show the arguments nvim was started with, so tests can read them off the pane.
+printf 'NVIM'
+printf ' [%s]' "$@"
+printf '\n'

@@ -4,6 +4,13 @@
 # Works from inside herdr (switches the current client) and from a plain
 # terminal (starts the server if needed, then attaches).
 #
+#   herdr-sessionizer              pick a directory and open it
+#   herdr-sessionizer DIR          open DIR
+#   herdr-sessionizer --print      pick a directory and print it
+#   herdr-sessionizer --edit FILE [LINE [COLUMN]]
+#                                  open FILE in nvim in its project's workspace,
+#                                  in the background
+#
 # Directories come from $HERDR_SESSIONIZER_CONFIG, default
 # ${XDG_CONFIG_HOME:-~/.config}/herdr/sessionizer/directories. One path per
 # line; a path with wildcards offers every directory it matches instead, and
@@ -70,9 +77,78 @@ read_config() {
 	done < <(if [[ -f $config ]]; then cat "$config"; else printf '%s\n' '~' '~/*'; fi)
 }
 
+# The workspace label for a directory: its name from the directories file, "~"
+# for the home dir to match herdr's own label, or else the directory name like
+# tmux-sessionizer.
+label_for() {
+	local name=${1##*/}
+	if [[ -n ${labels[$1]} ]]; then
+		printf '%s\n' "${labels[$1]}"
+	elif [[ $1 == "$(realpath ~)" ]]; then
+		printf '%s\n' "~"
+	else
+		printf '%s\n' "${name//[. ]/_}"
+	fi
+}
+
+# The workspace directory for a file: the nearest folder above it that the
+# directories file lists, else its git root, else the folder it is in.
+project_dir() {
+	local dir=${1%/*}
+	while [[ -n $dir ]]; do
+		[[ -n ${seen[$dir]} ]] && printf '%s\n' "$dir" && return
+		dir=${dir%/*}
+	done
+	git -C "${1%/*}" rev-parse --show-toplevel 2>/dev/null || printf '%s\n' "${1%/*}"
+}
+
+workspace_id() {
+	herdr workspace list | jq -r --arg l "$1" \
+		'first(.result.workspaces[] | select(.label == $l) | .workspace_id) // empty'
+}
+
+# Outside herdr there may be no server yet. Start one detached, the same way a
+# bare `herdr` would, so workspaces can be made before anything attaches.
+start_server() {
+	[[ $HERDR_ENV == 1 ]] && return
+	herdr workspace list >/dev/null 2>&1 && return
+	setsid -f herdr server >/dev/null 2>&1 </dev/null
+	for _ in $(seq 50); do
+		herdr workspace list >/dev/null 2>&1 && break
+		sleep 0.1
+	done
+}
+
+# Open a file in nvim at line $2, column $3, in its project's workspace without
+# focusing it: in the first pane of a new workspace, or in a new tab of an open
+# one so nothing already running there gets typed into.
+edit_file() {
+	local file dir label workspace pane command
+	file=$(realpath "$1") || return
+	dir=$(project_dir "$file")
+	label=$(label_for "$dir")
+	start_server
+	workspace=$(workspace_id "$label")
+	if [[ -z $workspace ]]; then
+		pane=$(herdr workspace create --cwd "$dir" --label "$label" --no-focus |
+			jq -r '.result.root_pane.pane_id // empty')
+	else
+		pane=$(herdr tab create --workspace "$workspace" --cwd "$dir" --no-focus |
+			jq -r '.result.root_pane.pane_id // empty')
+	fi
+	[[ -n $pane ]] || return
+	printf -v command '%q ' nvim "+call cursor($2, $3)" "$file"
+	herdr pane run "$pane" "$command" >/dev/null
+}
+
 read_config
 
-if [[ $# -eq 1 ]]; then
+if [[ $1 == --edit ]]; then
+	edit_file "$2" "${3:-1}" "${4:-1}"
+	exit
+fi
+
+if [[ $# -eq 1 && $1 != --print ]]; then
 	selected=$1
 elif ((${#directories[@]})); then
 	selected=$(printf '%s\n' "${directories[@]}" | fzf)
@@ -81,35 +157,19 @@ fi
 if [[ -z $selected ]]; then
 	exit 0
 fi
+if [[ $1 == --print ]]; then
+	printf '%s\n' "$selected"
+	exit
+fi
 selected=$(realpath "$selected")
+selected_name=$(label_for "$selected")
 
-if [[ -n ${labels[$selected]} ]]; then
-	selected_name=${labels[$selected]}
-elif [[ $selected == "$(realpath ~)" ]]; then
-	# Match herdr's own label for a workspace sitting in the home dir.
-	selected_name="~"
-else
-	# Same naming as tmux-sessionizer.
-	selected_name=$(basename "$selected" | tr . _ | tr ' ' _)
-fi
-
-# Outside herdr there may be no server yet. Start one detached, the same way a
-# bare `herdr` would, so the workspace exists before we attach.
-if [[ $HERDR_ENV != 1 ]] && ! herdr workspace list >/dev/null 2>&1; then
-	setsid -f herdr server >/dev/null 2>&1 </dev/null
-	for _ in $(seq 50); do
-		herdr workspace list >/dev/null 2>&1 && break
-		sleep 0.1
-	done
-fi
-
-workspace_id=$(herdr workspace list | jq -r --arg l "$selected_name" \
-	'first(.result.workspaces[] | select(.label == $l) | .workspace_id) // empty')
-
-if [[ -z $workspace_id ]]; then
+start_server
+workspace=$(workspace_id "$selected_name")
+if [[ -z $workspace ]]; then
 	herdr workspace create --cwd "$selected" --label "$selected_name" --focus >/dev/null || exit 1
 else
-	herdr workspace focus "$workspace_id" >/dev/null
+	herdr workspace focus "$workspace" >/dev/null
 fi
 
 # Inside herdr the focus change already switched the client; outside, attach.

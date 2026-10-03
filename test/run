@@ -1,0 +1,267 @@
+#!/usr/bin/env bash
+# Tests for herdr-sessionizer. They run against a throwaway herdr session, with
+# stubs for fzf and nvim, in a temporary home directory.
+#
+#   test/run
+T=$(cd "$(dirname "$0")" && pwd)
+SCRIPT=$T/../herdr-sessionizer
+
+export HERDR_TEST_BIN HERDR_TEST_SESSION=herdr-sessionizer-test-$$
+HERDR_TEST_BIN=$(command -v herdr) || { echo "herdr is not installed" >&2; exit 1; }
+NVIM_BIN=$(command -v nvim)
+export PATH=$T/stubs:$PATH
+unset HERDR_ENV HERDR_SOCKET_PATH HERDR_PANE_ID HERDR_TAB_ID HERDR_WORKSPACE_ID
+
+H=$(mktemp -d)
+trap 'stop_session; rm -rf "$H"' EXIT
+pass=0 fail=0
+
+setup_home() {
+	mkdir -p "$H/customers/acme/api/src" "$H/customers/globex/web" "$H/named/thing" \
+		"$H/loose/repo/sub" "$H/loose/plain" "$H/sp ace/proj"
+	printf 'one\ntwo\nthree\n' > "$H/customers/acme/api/src/x.txt"
+	printf 'one\n' > "$H/named/thing/f.txt"
+	printf 'one\n' > "$H/loose/repo/sub/f.txt"
+	git -C "$H/loose/repo" init -q
+	printf 'one\n' > "$H/loose/plain/f.txt"
+	printf 'one\n' > "$H/sp ace/proj/my file.txt"
+	cat > "$H/directories" <<-'EOF'
+	~/customers/*
+	~/customers/*/*
+	~/named/thing = my-thing
+	~/sp ace/*
+	EOF
+}
+
+stop_session() {
+	"$HERDR_TEST_BIN" session stop "$HERDR_TEST_SESSION" >/dev/null 2>&1
+	"$HERDR_TEST_BIN" session delete "$HERDR_TEST_SESSION" >/dev/null 2>&1
+}
+
+# A running server with one focused workspace, as if herdr was already in use.
+start_session() {
+	setsid -f herdr server >/dev/null 2>&1 </dev/null
+	for _ in $(seq 50); do herdr workspace list >/dev/null 2>&1 && break; sleep 0.1; done
+	herdr workspace create --cwd "$H" --label existing --focus >/dev/null
+}
+
+sessionizer() {
+	HOME=$H HERDR_SESSIONIZER_CONFIG=${CONFIG:-$H/directories} "$SCRIPT" "$@"
+}
+
+workspaces() {
+	herdr workspace list 2>/dev/null | jq -c '[.result.workspaces[] | {label, focused}]'
+}
+
+workspace_id() {
+	herdr workspace list 2>/dev/null |
+		jq -r --arg l "$1" 'first(.result.workspaces[] | select(.label == $l) | .workspace_id) // empty'
+}
+
+panes_in() {
+	herdr pane list 2>/dev/null | jq -r --arg w "$1" '.result.panes[] | select(.workspace_id == $w) | .pane_id'
+}
+
+# Wait up to 3s for text to show up in one of a workspace's panes.
+pane_shows() {
+	local pane
+	for _ in $(seq 30); do
+		for pane in $(panes_in "$1"); do
+			herdr pane read "$pane" 2>/dev/null | tr -d '\n' | grep -qF -- "$2" && return 0
+		done
+		sleep 0.1
+	done
+	return 1
+}
+
+check() {
+	local name=$1
+	shift
+	if "$@"; then
+		pass=$((pass + 1))
+		echo "ok   $name"
+	else
+		fail=$((fail + 1))
+		echo "FAIL $name"
+	fi
+}
+
+setup_home
+
+# --print ---------------------------------------------------------------------
+stop_session; start_session
+out=$(FZF_PICK=globex/web sessionizer --print)
+check "--print prints the picked directory" test "$out" = "$H/customers/globex/web"
+check "--print opens no workspace" test "$(workspaces)" = '[{"label":"existing","focused":true}]'
+out=$(FZF_PICK= sessionizer --print)
+check "--print prints nothing when the picker is cancelled" test -z "$out"
+
+# --edit ----------------------------------------------------------------------
+stop_session
+sessionizer --edit "$H/customers/acme/api/src/x.txt" 2 3
+check "--edit succeeds" test $? = 0
+check "--edit starts the server and names the workspace after the nearest listed folder" \
+	test "$(workspaces)" = '[{"label":"acme/api","focused":true}]'
+check "--edit runs nvim on the file at the cursor" \
+	pane_shows "$(workspace_id acme/api)" "NVIM [+call cursor(2, 3)] [$H/customers/acme/api/src/x.txt]"
+
+stop_session; start_session
+sessionizer --edit "$H/customers/acme/api/src/x.txt" 1 1
+check "--edit leaves the focused workspace focused" \
+	test "$(workspaces)" = '[{"label":"existing","focused":true},{"label":"acme/api","focused":false}]'
+
+stop_session; start_session
+sessionizer --edit "$H/named/thing/f.txt" 1 1
+check "--edit uses the name from \"path = name\"" test -n "$(workspace_id my-thing)"
+
+stop_session; start_session
+sessionizer --edit "$H/loose/repo/sub/f.txt" 1 1
+check "--edit falls back to the git root" test -n "$(workspace_id repo)"
+
+stop_session; start_session
+sessionizer --edit "$H/loose/plain/f.txt" 1 1
+check "--edit falls back to the file's folder" test -n "$(workspace_id plain)"
+
+stop_session; start_session
+sessionizer --edit "$H/sp ace/proj/my file.txt" 1 1
+check "--edit handles spaces in paths" \
+	pane_shows "$(workspace_id proj)" "NVIM [+call cursor(1, 1)] [$H/sp ace/proj/my file.txt]"
+
+stop_session; start_session
+herdr workspace create --cwd "$H/customers/acme/api" --label acme/api --no-focus >/dev/null
+ws=$(workspace_id acme/api)
+first=$(panes_in "$ws")
+sessionizer --edit "$H/customers/acme/api/src/x.txt" 2 3
+check "--edit reuses an open workspace" \
+	test "$(workspaces)" = '[{"label":"existing","focused":true},{"label":"acme/api","focused":false}]'
+check "--edit opens a new tab in an open workspace" test "$(panes_in "$ws" | wc -l)" = 2
+check "--edit runs nvim in the new tab" \
+	pane_shows "$ws" "NVIM [+call cursor(2, 3)] [$H/customers/acme/api/src/x.txt]"
+check "--edit leaves the open workspace's first pane alone" \
+	bash -c '! herdr pane read "$1" 2>/dev/null | grep -q NVIM' _ "$first"
+
+# picking a directory ---------------------------------------------------------
+stop_session; start_session
+HERDR_ENV=1 sessionizer "$H/customers/acme"
+check "a directory argument opens and focuses its workspace" \
+	test "$(workspaces)" = '[{"label":"existing","focused":false},{"label":"acme","focused":true}]'
+
+# wildcards -------------------------------------------------------------------
+mkdir -p "$H/w/customers/acme/"{api,web,.hidden} "$H/w/customers/globex/"{api,web} \
+	"$H/w/customers/my.co/new app" "$H/w/archive/"{2024,old} "$H/w/src/"{tool,_scratch}
+touch "$H/w/customers/acme/README.md"
+
+# The directories the picker offers for a directories file of these lines,
+# relative to ~/w.
+offers() {
+	printf '%s\n' "$@" > "$H/wild"
+	rm -f "$H/offered"
+	CONFIG=$H/wild FZF_INPUT=$H/offered FZF_PICK= sessionizer
+	[[ -f $H/offered ]] && sed "s|^$H/w/||" "$H/offered"
+}
+
+# Whether opening a directory, with a directories file of the lines after it,
+# gives its workspace this label.
+opens_as() {
+	local dir=$1 label=$2
+	shift 2
+	printf '%s\n' "$@" > "$H/wild"
+	stop_session; start_session
+	CONFIG=$H/wild HERDR_ENV=1 sessionizer "$dir"
+	test -n "$(workspace_id "$label")"
+}
+
+check "wildcards offer matching folders, skipping hidden ones and files" \
+	test "$(offers '~/w/customers/*/*')" = $'customers/acme/api\ncustomers/acme/web\ncustomers/globex/api\ncustomers/globex/web\ncustomers/my.co/new app'
+check "? matches one character" test "$(offers '~/w/archive/20??')" = archive/2024
+check "[!...] leaves out a set" test "$(offers '~/w/src/[!_]*')" = src/tool
+check "a wildcard that matches nothing offers nothing" test -z "$(offers '~/w/nope/*/*')"
+check "a bracket that isn't a wildcard offers nothing" test -z "$(offers '~/w/src/[x')"
+check "a wildcard folder is named from the first wildcard on" \
+	opens_as "$H/w/customers/acme/api" acme/api '~/w/customers/*/*'
+check "dots and spaces in names become underscores" \
+	opens_as "$H/w/customers/my.co/new app" my_co/new_app '~/w/customers/*/*'
+check "a name given before a wildcard line wins" \
+	opens_as "$H/w/customers/acme/api" mine '~/w/customers/acme/api = mine' '~/w/customers/*/*'
+check "a name given after a wildcard line wins" \
+	opens_as "$H/w/customers/acme/api" mine '~/w/customers/*/*' '~/w/customers/acme/api = mine'
+
+# Neovim mapping --------------------------------------------------------------
+# Runs one scenario of test/nvim.lua with the given variables set.
+nvim_scenario() {
+	mkdir -p "$H/nvim"
+	printf 'one\ntwo\nthree\n' > "$H/nvim/x.txt"
+	printf 'other\n' > "$H/nvim/other.txt"
+	: > "$H/nvim.log"
+	env HOME="$H" TEST_LOG="$H/nvim.log" TEST_README="$T/../README.md" "$@" \
+		"$NVIM_BIN" --headless --clean -c "luafile $T/nvim.lua" >/dev/null 2>&1
+}
+
+logged() { grep -qxF -- "$1" "$H/nvim.log"; }
+not_logged() { ! grep -qF -- "$1" "$H/nvim.log"; }
+
+file=$H/nvim/x.txt
+pick=$H/customers/globex/web
+window="uwsm-app -- xdg-terminal-exec $T/stubs/herdr-sessionizer $pick"
+
+if [[ -z $NVIM_BIN ]]; then
+	echo "skip Neovim mapping: nvim is not installed"
+else
+	nvim_scenario HERDR_ENV=1 TEST_FILE="$file"
+	check "nvim inside herdr: runs the picker" logged "sessionizer "
+	check "nvim inside herdr: leaves the file open" logged "file open"
+	check "nvim inside herdr: opens no window" not_logged uwsm-app
+
+	nvim_scenario TEST_FILE="$file"
+	check "nvim outside herdr, picker cancelled: leaves the file open" logged "file open"
+	check "nvim outside herdr, picker cancelled: does nothing else" \
+		test "$(cat "$H/nvim.log")" = "file open"
+
+	nvim_scenario TEST_FILE="$file" TEST_PICK="$pick"
+	check "nvim outside herdr: doesn't ask to save an unchanged file" not_logged "asked to save"
+	check "nvim outside herdr: opens the file at the cursor in its workspace" \
+		logged "sessionizer --edit $file 2 3"
+	check "nvim outside herdr: opens the picked workspace in a new window" logged "$window"
+	check "nvim outside herdr: quits when that was the only file" logged quit
+
+	nvim_scenario TEST_FILE="$file" TEST_PICK="$pick" TEST_OTHER="$H/nvim/other.txt"
+	check "nvim outside herdr, other files open: closes the file" logged "file closed"
+	check "nvim outside herdr, other files open: opens the window" logged "$window"
+	check "nvim outside herdr, other files open: stays open" not_logged quit
+
+	nvim_scenario TEST_FILE="$file" TEST_PICK="$pick" TEST_MODIFY=1 TEST_ANSWER=1
+	check "nvim outside herdr, unsaved changes: asks to save" logged "asked to save"
+	check "nvim outside herdr, unsaved changes, yes: saves the file" \
+		test "$(head -1 "$file")" = changed
+	check "nvim outside herdr, unsaved changes, yes: carries on" logged "$window"
+
+	nvim_scenario TEST_FILE="$file" TEST_PICK="$pick" TEST_MODIFY=1 TEST_ANSWER=2
+	check "nvim outside herdr, unsaved changes, no: leaves the file unchanged" \
+		test "$(head -1 "$file")" = one
+	check "nvim outside herdr, unsaved changes, no: carries on" logged "$window"
+
+	nvim_scenario TEST_FILE="$file" TEST_PICK="$pick" TEST_MODIFY=1 TEST_ANSWER=3
+	check "nvim outside herdr, unsaved changes, cancel: leaves the file open" logged "file open"
+	check "nvim outside herdr, unsaved changes, cancel: does nothing else" \
+		test "$(cat "$H/nvim.log")" = $'asked to save\nfile open'
+
+	nvim_scenario TEST_PICK="$pick"
+	check "nvim outside herdr, empty buffer: opens no file" not_logged "sessionizer --edit"
+	check "nvim outside herdr, empty buffer: opens the window" logged "$window"
+	check "nvim outside herdr, empty buffer: quits" logged quit
+
+	nvim_scenario TEST_PICK="$pick" TEST_SCRATCH=1
+	check "nvim outside herdr, other kind of buffer: opens no file" not_logged "sessionizer --edit"
+	check "nvim outside herdr, other kind of buffer: opens the window" logged "$window"
+	check "nvim outside herdr, other kind of buffer: stays open" not_logged quit
+
+	nvim_scenario TEST_FILE="$file" TEST_PICK="$pick" TEST_EDIT_STATUS=1
+	check "nvim outside herdr, --edit fails: says so" \
+		logged "notify herdr-sessionizer: couldn't open $file in herdr"
+	check "nvim outside herdr, --edit fails: reopens the file" logged "file open"
+	check "nvim outside herdr, --edit fails: opens no window" not_logged uwsm-app
+fi
+
+echo
+echo "$pass passed, $fail failed"
+((fail == 0))

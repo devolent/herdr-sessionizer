@@ -1,0 +1,9 @@
+#!/bin/sh
+# Stands in for herdr-sessionizer in the Neovim tests: --print picks $TEST_PICK,
+# anything else is logged and exits with $TEST_EDIT_STATUS.
+if [ "$1" = --print ]; then
+	[ -n "$TEST_PICK" ] && printf '%s\n' "$TEST_PICK"
+	exit 0
+fi
+printf 'sessionizer %s\n' "$*" >> "$TEST_LOG"
+exit "${TEST_EDIT_STATUS:-0}"
